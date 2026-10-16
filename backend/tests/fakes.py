@@ -66,13 +66,27 @@ class FakeFirestore:
 class FakeAuth:
     """Tokens de teste: 'tok:<uid>:<email>:<verificado 1/0>'."""
     def __init__(self):
-        self.apagados = []
+        self.apagados, self.usuarios = [], {}   # usuarios: email -> dict(uid, nome, email_verified)
 
     def verify(self, token):
         partes = token.split(":")
         if len(partes) != 4 or partes[0] != "tok":
             raise ValueError("token inválido")
-        return {"uid": partes[1], "email": partes[2], "email_verified": partes[3] == "1"}
+        claims = {"uid": partes[1], "email": partes[2], "email_verified": partes[3] == "1"}
+        if partes[2] in self.usuarios:  # o Firebase real inclui o displayName no token ("name")
+            claims["name"] = self.usuarios[partes[2]]["nome"]
+        return claims
+
+    def email_existe(self, email):
+        return email in self.usuarios
+
+    def create_user(self, email, senha, nome):
+        from app.firebase import EmailJaExiste
+        if email in self.usuarios:
+            raise EmailJaExiste()
+        uid = f"uid_{len(self.usuarios) + 1}"
+        self.usuarios[email] = {"uid": uid, "nome": nome, "senha": senha, "email_verified": True}
+        return uid
 
     def delete_user(self, uid):
         self.apagados.append(uid)

@@ -11,14 +11,10 @@ const app = getApps()[0] ?? initializeApp({
 
 export const auth = getAuth(app);
 
-/* Uso nas telas (cadastro / login / esqueci-senha):
-   import { createUserWithEmailAndPassword, sendEmailVerification, signInWithEmailAndPassword,
-            sendPasswordResetEmail, signOut } from 'firebase/auth';
-
-   cadastro:  const { user } = await createUserWithEmailAndPassword(auth, email, senha);
-              await sendEmailVerification(user);          // RF02: e-mail de confirmação
-   login:     await signInWithEmailAndPassword(auth, email, senha);
-              const perfil = (await api.get('/me')).data;  // cria o perfil no 1º acesso
-   esqueci:   await sendPasswordResetEmail(auth, email);
-   sair:      await signOut(auth);
-*/
+/* Como o login funciona neste projeto
+   - CADASTRO: feito pelo backend em 2 etapas (POST /auth/cadastro envia o código por e-mail;
+     POST /auth/confirmar cria a conta no Firebase). Depois, o login é normal.
+   - LOGIN:    signInWithEmailAndPassword(auth, email, senha)  +  api.get('/me')
+   - ESQUECI:  sendPasswordResetEmail(auth, email)  (direto no Firebase)
+   - SAIR:     signOut(auth)  (veja lib/auth.ts)
+   Veja app/cadastro, app/login, app/esqueci-senha e app/(app)/layout.tsx (guarda das telas logadas). */

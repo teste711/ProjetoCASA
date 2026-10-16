@@ -1,12 +1,21 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .routers import categorias, dispositivos, perfil
+from . import storage
+from .routers import auth, categorias, dispositivos, historico, midias, notificacoes, perfil
 
-app = FastAPI(title="C.A.S.A. API", version="2.0.0",
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    storage.garantir_pasta()
+    yield
+
+
+app = FastAPI(lifespan=lifespan, title="C.A.S.A. API", version="2.0.0",
               description="Auth: Firebase Authentication (token Bearer). Dados: Cloud Firestore.")
 app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
                    allow_methods=["*"], allow_headers=["*"])
@@ -24,7 +33,7 @@ async def _val(_: Request, e: RequestValidationError):
     return JSONResponse(status_code=422, content={"codigo": "validacao", "mensagem": msg, "detail": msg})
 
 
-for r in (perfil.router, categorias.router, dispositivos.router):
+for r in (auth.router, midias.router, perfil.router, categorias.router, dispositivos.router, historico.router, notificacoes.router):
     app.include_router(r)
 
 

@@ -1,21 +1,31 @@
 """Pareamento do ESP32 (app) + API do aparelho (/device/*) + histórico de uso."""
 from datetime import datetime, timedelta, timezone
 
+from ..config import settings
+
 from fastapi import APIRouter, Depends
 
 from ..deps import dispositivo_atual, erro, get_db, usuario_atual
 from ..schemas import DispositivoIn, DispositivoUpdate, Telemetria
 from ..security import novo_token_dispositivo
-from ..util import agora_iso, filtro
+from ..util import agora_iso, filtro, notificar
 
 router = APIRouter(tags=["Dispositivos e histórico"])
 
-PUBLICO = ("mac", "nome", "nome_paciente", "modo", "ip", "firmware", "bateria_pct", "carregando",
+PUBLICO = ("mac", "nome", "ssid", "sinal_wifi", "nome_paciente", "modo", "ip", "firmware", "bateria_pct", "carregando",
            "ultima_sincronizacao", "volume", "brilho_leds", "brilho_telas", "tempo_inatividade_s", "config_versao")
 
 
+def _online(d: dict) -> bool:
+    ult = d.get("ultima_sincronizacao")
+    if not ult:
+        return False
+    return datetime.now(timezone.utc) - datetime.fromisoformat(ult) <= timedelta(minutes=settings.device_offline_minutos)
+
+
 def _publico(d: dict) -> dict:
-    return {k: d.get(k) for k in PUBLICO}
+    return {**{k: d.get(k) for k in PUBLICO}, "online": _online(d),
+            "codigo": "ESP32-" + d["mac"].replace(":", "")[-4:]}
 
 
 def _meu(db, uid, mac):
@@ -37,6 +47,7 @@ def parear(dados: DispositivoIn, u=Depends(usuario_atual), db=Depends(get_db)):
            "nome_paciente": dados.nome_paciente, "modo": "casa", "volume": 70, "brilho_leds": 70, "brilho_telas": 80,
            "tempo_inatividade_s": 60, "config_versao": 1, "criado_em": agora_iso()}
     ref.set(doc)
+    notificar(db, u["uid"], "dispositivo_conectado", "Dispositivo Conectado", f"{doc['nome']} pareado com sucesso")
     return {**_publico(doc), "device_token": token}
 
 
@@ -58,21 +69,6 @@ def remover(mac: str, u=Depends(usuario_atual), db=Depends(get_db)):
     _meu(db, u["uid"], mac).delete()
 
 
-@router.get("/historico", summary="Botões mais e menos acionados")
-def historico(u=Depends(usuario_atual), db=Depends(get_db)):
-    cont: dict[tuple, dict] = {}
-    for s in db.collection("usuarios").document(u["uid"]).collection("acionamentos").stream():
-        a = s.to_dict()
-        k = (a["botao_nome"], a["categoria_nome"])
-        c = cont.setdefault(k, {"nome": k[0], "categoria": k[1], "total": 0, "ultimo": ""})
-        c["total"] += 1
-        c["ultimo"] = max(c["ultimo"], a["acionado_em"])
-    itens = sorted(cont.values(), key=lambda i: (-i["total"], i["ultimo"]))
-    metade = (len(itens) + 1) // 2
-    return {"total_acionamentos": sum(i["total"] for i in itens), "tem_dados": bool(itens),
-            "mais_acionados": itens[:metade], "menos_acionados": list(reversed(itens[metade:]))}
-
-
 # ───────────── aparelho (ESP32) — cabeçalho X-Device-Token ─────────────
 @router.get("/device/config", tags=["API do aparelho (ESP32)"], summary="Layout + ajustes (ou {alterado:false})")
 def device_config(versao_atual: int | None = None, d=Depends(dispositivo_atual), db=Depends(get_db)):
@@ -83,7 +79,19 @@ def device_config(versao_atual: int | None = None, d=Depends(dispositivo_atual),
     cats = sorted(({"id": s.id, **s.to_dict()} for s in
                    db.collection("usuarios").document(disp["owner_uid"]).collection("categorias").stream()),
                   key=lambda c: c.get("ordem", 0))
-    return {"alterado": True, "config_versao": disp["config_versao"], "modo": disp["modo"],
+    midias = {m.id: m.to_dict() for m in
+              db.collection("usuarios").document(disp["owner_uid"]).collection("midias").stream()}
+    arquivos, vistos = [], set()
+    for c in cats:
+        for b in c.get("botoes", []):
+            for k in ("imagem_id", "audio_id"):
+                mid = b.get(k)
+                if mid and mid in midias and mid not in vistos:
+                    vistos.add(mid)
+                    m = midias[mid]
+                    arquivos.append({"id": mid, "tipo": m["tipo"], "mime": m["mime"], "tamanho": m["tamanho"],
+                                     "sha256": m["sha256"], "url": f"/device/midias/{mid}"})
+    return {"alterado": True, "config_versao": disp["config_versao"], "modo": disp["modo"], "arquivos": arquivos,
             "ajustes": {k: disp[k] for k in ("volume", "brilho_leds", "brilho_telas", "tempo_inatividade_s")},
             "layout": {"categorias": cats}}
 
@@ -92,7 +100,13 @@ def device_config(versao_atual: int | None = None, d=Depends(dispositivo_atual),
 def device_telemetria(dados: Telemetria, d=Depends(dispositivo_atual), db=Depends(get_db)):
     ref, disp = d
     estado = dados.model_dump(exclude={"acionamentos"}, exclude_none=True)
+    antes, carregando = disp.get("bateria_pct"), estado.get("carregando", disp.get("carregando"))
     ref.update({**estado, "ultima_sincronizacao": agora_iso()})
+    # Notifica só ao CRUZAR o limite (evita repetir a cada sincronização)
+    nova = dados.bateria_pct
+    if nova is not None and nova <= settings.bateria_baixa_pct and not carregando \
+            and (antes is None or antes > settings.bateria_baixa_pct):
+        notificar(db, disp["owner_uid"], "bateria_baixa", "Bateria do ESP32", f"Nível em {nova}%")
 
     botoes = {}
     for s in db.collection("usuarios").document(disp["owner_uid"]).collection("categorias").stream():
@@ -111,7 +125,19 @@ def device_telemetria(dados: Telemetria, d=Depends(dispositivo_atual), db=Depend
             continue
         nome, cat = botoes[a.botao_id]
         doc.set({"botao_id": a.botao_id, "botao_nome": nome, "categoria_nome": cat, "dispositivo": disp["mac"],
-                 "acionado_em": (agora - timedelta(seconds=a.ha_segundos)).isoformat()})
+                 "origem": "dispositivo", "acionado_em": (agora - timedelta(seconds=a.ha_segundos)).isoformat()})
         recebidos += 1
     return {"recebidos": recebidos, "duplicados": duplicados, "ignorados": ignorados,
             "config_versao": disp["config_versao"]}
+
+
+@router.get("/device/midias/{mid}", tags=["API do aparelho (ESP32)"], summary="Baixa imagem/áudio de um botão")
+def device_midia(mid: str, d=Depends(dispositivo_atual), db=Depends(get_db)):
+    from fastapi.responses import FileResponse
+    from .. import storage
+    snap = db.collection("usuarios").document(d[1]["owner_uid"]).collection("midias").document(mid).get()
+    if not snap.exists:
+        raise erro(404, "nao_encontrado", "Arquivo não encontrado.")
+    m = snap.to_dict()
+    return FileResponse(storage.caminho(m["arquivo"]), media_type=m["mime"],
+                        headers={"X-Content-SHA256": m["sha256"], "X-Content-Type-Options": "nosniff"})

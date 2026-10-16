@@ -1,4 +1,7 @@
-from fastapi import Depends, Header, HTTPException
+import time
+from collections import defaultdict, deque
+
+from fastapi import Depends, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.cloud.firestore_v1.base_query import FieldFilter
 
@@ -28,13 +31,12 @@ def usuario_atual(cred: HTTPAuthorizationCredentials | None = Depends(_bearer), 
         raise erro(401, "nao_autenticado", "Faça login para continuar.")
     try:
         c = fb.verify(cred.credentials)
-    except Exception as e:
-        import logging
-        logging.getLogger("uvicorn.error").exception("Falha ao validar token: %s", e)
+    except Exception:
         raise erro(401, "token_invalido", "Sessão inválida ou expirada. Faça login novamente.")
     if settings.require_email_verified and not c.get("email_verified"):
         raise erro(403, "email_nao_verificado", "Confirme seu e-mail (link enviado pelo Firebase) para continuar.")
-    return {"uid": c["uid"], "email": c.get("email"), "email_verified": c.get("email_verified", False)}
+    return {"uid": c["uid"], "email": c.get("email"), "email_verified": c.get("email_verified", False),
+            "nome": c.get("name")}
 
 
 def dispositivo_atual(x_device_token: str | None = Header(default=None), db=Depends(get_db)):
@@ -45,3 +47,20 @@ def dispositivo_atual(x_device_token: str | None = Header(default=None), db=Depe
     if not docs:
         raise erro(401, "dispositivo_nao_autenticado", "Token de dispositivo inválido.")
     return docs[0].reference, docs[0].to_dict()
+
+
+class Limitador:
+    """Limite simples em memória por IP+rota (com vários workers, use Redis ou o proxy)."""
+    _hits: dict = defaultdict(deque)
+
+    def __init__(self, maximo: int, janela_s: int = 60):
+        self.maximo, self.janela = maximo, janela_s
+
+    def __call__(self, request: Request):
+        chave = f"{request.client.host if request.client else '?'}:{request.url.path}"
+        agora, fila = time.monotonic(), self._hits[chave]
+        while fila and agora - fila[0] > self.janela:
+            fila.popleft()
+        if len(fila) >= self.maximo:
+            raise erro(429, "muitas_requisicoes", "Muitas tentativas. Aguarde um instante e tente de novo.")
+        fila.append(agora)

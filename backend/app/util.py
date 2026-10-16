@@ -22,3 +22,31 @@ def bump_dispositivos(db, uid: str) -> None:
     """Avisa os aparelhos do usuário que há conteúdo novo (o ESP32 compara config_versao)."""
     for d in db.collection("dispositivos").where(filter=filtro("owner_uid", uid)).stream():
         d.reference.update({"config_versao": d.to_dict().get("config_versao", 1) + 1})
+
+
+def notificar(db, uid: str, tipo: str, titulo: str, mensagem: str) -> None:
+    """Cria uma notificação (respeitando a preferência 'notificacoes_ativas' do usuário)."""
+    import uuid
+    user = db.collection("usuarios").document(uid)
+    snap = user.get()
+    if snap.exists and not snap.to_dict().get("notificacoes_ativas", True):
+        return
+    user.collection("notificacoes").document(uuid.uuid4().hex[:12]).set(
+        {"tipo": tipo, "titulo": titulo, "mensagem": mensagem, "lida": False, "criada_em": agora_iso()})
+
+
+def liberar_midias(db, uid: str, candidatas: set[str]) -> None:
+    """Apaga (documento + arquivo em disco) as mídias candidatas que nenhum botão usa mais."""
+    if not candidatas:
+        return
+    from . import storage
+    usadas = set()
+    for c in db.collection("usuarios").document(uid).collection("categorias").stream():
+        for b in c.to_dict().get("botoes", []):
+            usadas.update(x for x in (b.get("imagem_id"), b.get("audio_id")) if x)
+    col = db.collection("usuarios").document(uid).collection("midias")
+    for mid in candidatas - usadas:
+        snap = col.document(mid).get()
+        if snap.exists:
+            storage.remover(snap.to_dict()["arquivo"])
+            col.document(mid).delete()

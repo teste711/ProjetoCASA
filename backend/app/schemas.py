@@ -1,5 +1,8 @@
 import re
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from .config import settings
+
 
 _MAC = re.compile(r"^([0-9A-Fa-f]{2}[:\-]?){5}[0-9A-Fa-f]{2}$")
 
@@ -14,17 +17,15 @@ class PerfilIn(BaseModel):
 class BotaoIn(BaseModel):
     rotulo: str = Field(min_length=1, max_length=60)
     significado: str | None = Field(default=None, max_length=200)
-    imagem_url: str | None = Field(default=None, max_length=1000)  # URL do Firebase Storage
-    audio_url: str | None = Field(default=None, max_length=1000)
-    audio_nome: str | None = Field(default=None, max_length=255)
+    imagem_id: str | None = None   # id retornado por POST /midias
+    audio_id: str | None = None
 
 
 class BotaoUpdate(BaseModel):
     rotulo: str | None = Field(default=None, min_length=1, max_length=60)
     significado: str | None = None
-    imagem_url: str | None = None
-    audio_url: str | None = None
-    audio_nome: str | None = None
+    imagem_id: str | None = None   # envie null para remover
+    audio_id: str | None = None
 
 
 class CategoriaIn(BaseModel):
@@ -67,4 +68,54 @@ class Telemetria(BaseModel):
     carregando: bool | None = None
     ip: str | None = Field(default=None, max_length=45)
     firmware: str | None = Field(default=None, max_length=30)
+    ssid: str | None = Field(default=None, max_length=32)       # rede Wi-Fi atual
+    sinal_wifi: int | None = Field(default=None, ge=0, le=100)  # intensidade em %
     acionamentos: list[AcionamentoDispositivo] = Field(default_factory=list, max_length=500)
+
+
+class OrdemIn(BaseModel):
+    ids: list[str] = Field(min_length=1)
+
+
+class AcionamentoApp(BaseModel):
+    botao_id: str
+
+
+_REGRA_SENHA = "A senha deve ter no mínimo 8 caracteres, uma letra maiúscula e um número ou caractere especial."
+
+
+def validar_senha(v: str) -> str:
+    """Mesma regra do formulário de cadastro."""
+    if len(v) < 8 or not re.search(r"[A-Z]", v) or not re.search(r'[0-9!@#$%^&*(),.?":{}|<>]', v):
+        raise ValueError(_REGRA_SENHA)
+    if len(v) > 128:
+        raise ValueError("A senha deve ter no máximo 128 caracteres.")
+    return v
+
+
+class CadastroIn(BaseModel):
+    nome: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    senha: str
+
+    @field_validator("nome")
+    @classmethod
+    def _nome(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if len(v) < 2:
+            raise ValueError("Informe um nome válido.")
+        return v
+
+    _senha = field_validator("senha")(validar_senha)
+
+
+class ConfirmarIn(BaseModel):
+    email: EmailStr
+    codigo: str = Field(pattern=r"^\d{6}$")
+    senha: str   # reenviada aqui: o servidor NÃO guarda a senha entre as duas etapas
+
+    _senha = field_validator("senha")(validar_senha)
+
+
+class ReenviarIn(BaseModel):
+    email: EmailStr
