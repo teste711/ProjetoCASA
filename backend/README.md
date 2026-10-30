@@ -3,7 +3,7 @@
 - **Cadastro com e-mail confirmado:** a conta só é criada no Firebase depois que o usuário digita o código de 6 dígitos recebido por e-mail.
 - **Login / esqueci a senha:** Firebase Authentication, direto no frontend. O backend só valida o token (`Authorization: Bearer …`).
 - **Dados:** Cloud Firestore (perfil, categorias/botões, dispositivos, histórico, notificações). **Mídia dos botões do site:** arquivos em disco (`uploads/`).
-- **Fluxo do IoT:** o app envia imagens/áudios à API → ela converte (JPEG 240×240), codifica em **base64**, grava no **Firestore** e acende um **sinal no Realtime Database** → o dispositivo busca, confirma e a API limpa. Não usa o Firebase Storage (que exige plano pago). Veja `IOT_CONTRATO.md`.
+- **Fluxo do IoT:** o app envia imagens/áudios à API → ela converte (JPEG 240×240), codifica em **base64**, grava no **Firestore** e acende um **sinal no Realtime Database** → o dispositivo busca, confirma e a API limpa. Não usa o Firebase Storage (que exige plano pago). Veja `Fluxo_IoT.md`.
 
 ## Rodar
 ```powershell
@@ -14,7 +14,7 @@ python -m pip install -r requirements-dev.txt     # (em produção: só requirem
 copy .env.example .env      # depois edite o .env (SMTP, FIREBASE_DATABASE_URL...)
 python -m uvicorn main:app --reload --port 8000     # docs: http://localhost:8000/docs
 ```
-Coloque o `firebase-credentials.json` (chave de serviço) nesta pasta. **Confira o nome real do arquivo** (o Windows esconde `.json.json`).
+Coloque o `firebase-credentials.json` (chave de serviço) neste aqruivo.
 
 ### Testes
 ```powershell
@@ -58,5 +58,4 @@ dispositivos/{MAC}/fila/{id}           IoT: imagem/áudio em base64 aguardando o
 Realtime Database: `dispositivos/{MAC}/sync/{id}` = só o estado (pendente → baixando → concluido | erro).
 Regras do Firestore: `allow read, write: if false;` (só o backend acessa, via Admin SDK). Apagar dispositivo ou conta também apaga a fila (base64) e os sinais.
 
-## Limitações
-Histórico/desempenho filtram em Python (ok para o TCC). Redes Wi-Fi do aparelho não existem nesta versão. O limite de requisições e a trava do código são em memória (1 servidor). Arquivos em disco somem em hospedagens de disco efêmero (Render/Heroku grátis).
+
