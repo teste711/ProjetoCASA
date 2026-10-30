@@ -1,0 +1,18 @@
+# Python / Virtualenv
+venv/
+__pycache__/
+*.pyc
+
+# Ambientes / Chaves
+.env
+.env.example
+
+# Backend (dados locais)
+casa.db
+uploads/
+.pytest_cache/
+
+
+# Backend — NUNCA versionar chaves
+firebase-credentials.json
+**/*serviceAccount*.json
